@@ -1,7 +1,4 @@
-﻿// Existing code...
-
-// Add the correct using statements at the beginning
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -17,10 +14,10 @@ namespace BrowserSearch
     internal class Chromium : IBrowser
     {
         private readonly string _userDataDir;
-        private readonly Dictionary<string, ChromiumProfile> _profiles = new Dictionary<string, ChromiumProfile>();
+        private readonly Dictionary<string, ChromiumProfile> _profiles = new();
         private readonly string? _selectedProfileName;
-        private readonly List<Result> _history = new List<Result>();
-        private readonly Dictionary<string, List<ChromiumPrediction>> _predictions = new Dictionary<string, List<ChromiumPrediction>>();
+        private readonly List<Result> _history = new();
+        private readonly Dictionary<string, List<ChromiumPrediction>> _predictions = new();
 
         public Chromium(string userDataDir, string? profileName)
         {
@@ -32,19 +29,23 @@ namespace BrowserSearch
         {
             CreateProfiles();
 
+            // Load history from all profiles
             if (_selectedProfileName is null)
             {
                 foreach (ChromiumProfile profile in _profiles.Values)
                 {
                     profile.Init(_history, _predictions);
                 }
+
                 return;
             }
 
+            // Load history from selected profile
             if (!_profiles.TryGetValue(_selectedProfileName.ToLower(), out ChromiumProfile? selectedProfile))
             {
                 Log.Error($"Couldn't find profile '{_selectedProfileName}'", typeof(Chromium));
                 MessageBox.Show($"No profile with the name '{_selectedProfileName}' was found.", "BrowserSearch");
+
                 return;
             }
             selectedProfile.Init(_history, _predictions);
@@ -52,13 +53,14 @@ namespace BrowserSearch
 
         private void CreateProfiles()
         {
-            using StreamReader jsonFileReader = new(new FileStream(Path.Join(_userDataDir, @"Opera GX Stable\Local State"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
+            // Determine the appropriate path for the Local State file
+            string localStatePath = GetLocalStatePath(_userDataDir);
+
+            using StreamReader jsonFileReader = new(new FileStream(localStatePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
             JsonDocument localState = JsonDocument.Parse(jsonFileReader.ReadToEnd());
-            jsonFileReader.Close();
 
             string[] nameProperties = { "gaia_given_name", "gaia_name", "name", "shortcut_name" };
             JsonElement infoCache = localState.RootElement.GetProperty("profile").GetProperty("info_cache");
-
             foreach (JsonProperty profileInfo in infoCache.EnumerateObject())
             {
                 ChromiumProfile profile = new(Path.Join(_userDataDir, profileInfo.Name));
@@ -76,6 +78,27 @@ namespace BrowserSearch
                     }
                 }
             }
+        }
+
+        private string GetLocalStatePath(string userDataDir)
+        {
+            // Check if Opera GX is used, otherwise use the default path
+            // Adjust the condition to identify Opera GX or other browsers
+            if (IsOperaGX(userDataDir))
+            {
+                return Path.Join(userDataDir, @"Opera GX Stable\Local State");
+            }
+            else
+            {
+                return Path.Join(userDataDir, "Local State");
+            }
+        }
+
+        private bool IsOperaGX(string userDataDir)
+        {
+            // Implement a method to identify if the browser is Opera GX
+            // For example, check for specific files or directory names
+            return Directory.Exists(Path.Join(userDataDir, "Opera GX Stable"));
         }
 
         List<Result> IBrowser.GetHistory()
@@ -97,6 +120,7 @@ namespace BrowserSearch
                     return (int)prediction.hits;
                 }
             }
+
             return 0;
         }
     }
@@ -141,7 +165,6 @@ namespace BrowserSearch
                 Log.Warn($"Couldn't find database files in '{_path}'", typeof(ChromiumProfile));
                 return;
             }
-
             ArgumentNullException.ThrowIfNull(_historyDbConnection);
             ArgumentNullException.ThrowIfNull(_predictorDbConnection);
 
@@ -157,12 +180,17 @@ namespace BrowserSearch
 
         private void CopyDatabases()
         {
-            string _dirName = _path[(_path.LastIndexOf('\\') + 1)..];
+            string _dirName = _path.Substring(_path.LastIndexOf('\\') + 1);
             string historyCopy = Path.GetTempPath() + @"\BrowserSearch_History_" + _dirName;
             string predictorCopy = Path.GetTempPath() + @"\BrowserSearch_ActionPredictor_" + _dirName;
 
-            File.Copy(Path.Join(_path, "History"), historyCopy, true);
-            File.Copy(Path.Join(_path, "Network Action Predictor"), predictorCopy, true);
+            // We need to copy the databases, otherwise we can't open them while the browser is running
+            File.Copy(
+                Path.Join(_path, "History"), historyCopy, true
+            );
+            File.Copy(
+                Path.Join(_path, "Network Action Predictor"), predictorCopy, true
+            );
 
             _historyDbConnection = new($"Data Source={historyCopy}");
             _predictorDbConnection = new($"Data Source={predictorCopy}");
@@ -172,6 +200,7 @@ namespace BrowserSearch
         {
             cmd.Connection = connection;
             connection.Open();
+
             return cmd.ExecuteReader();
         }
 
@@ -184,8 +213,8 @@ namespace BrowserSearch
             while (reader.Read())
             {
                 string query = (string)reader[0];
-                string url = (string)reader[1];
-                long hits = (long)reader[2];
+                string url = (string)reader[1]; // Predicted URL for that query
+                long hits = (long)reader[2]; // Amount of times the prediction was correct and the user selected it
 
                 if (!predictions.TryGetValue(query, out List<ChromiumPrediction>? value))
                 {
@@ -216,11 +245,13 @@ namespace BrowserSearch
                     IcoPath = BrowserInfo.IconPath,
                     Action = action =>
                     {
+                        // Open URL in default browser
                         if (!Helper.OpenInShell(url))
                         {
                             Log.Error($"Couldn't open '{url}'", typeof(ChromiumProfile));
                             return false;
                         }
+
                         return true;
                     },
                 };
